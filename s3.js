@@ -512,165 +512,205 @@ function exportBackupData() {
 
 // Function to handle backup to S3 with chunked multipart upload using Blob
 async function backupToS3() {
-	const bucketName = localStorage.getItem('aws-bucket');
-	const awsRegion = localStorage.getItem('aws-region');
-	const awsAccessKey = localStorage.getItem('aws-access-key');
-	const awsSecretKey = localStorage.getItem('aws-secret-key');
-	const awsEndpoint = localStorage.getItem('aws-endpoint');
+    if (isExportInProgress) return;
+    isExportInProgress = true;
+    showActionMessage('正在导出...');
+    
+    const bucketName = localStorage.getItem('aws-bucket');
+    const awsRegion = localStorage.getItem('aws-region');
+    const awsAccessKey = localStorage.getItem('aws-access-key');
+    const awsSecretKey = localStorage.getItem('aws-secret-key');
+    const awsEndpoint = localStorage.getItem('aws-endpoint');
 
-	if (typeof AWS === 'undefined') {
-		await loadAwsSdk();
-	}
+    if (typeof AWS === 'undefined') {
+        await loadAwsSdk();
+    }
 
-	const awsConfig = {
-		accessKeyId: awsAccessKey,
-		secretAccessKey: awsSecretKey,
-		region: awsRegion
-	};
+    const awsConfig = {
+        accessKeyId: awsAccessKey,
+        secretAccessKey: awsSecretKey,
+        region: awsRegion
+    };
 
-	if (awsEndpoint) {
-		awsConfig.endpoint = awsEndpoint;
-	}
+    if (awsEndpoint) {
+        awsConfig.endpoint = awsEndpoint;
+    }
 
-	AWS.config.update(awsConfig);
+    AWS.config.update(awsConfig);
+    const s3 = new AWS.S3();
 
-	const data = await exportBackupData();
-	const dataStr = JSON.stringify(data);
-	const blob = new Blob([dataStr], { type: 'application/json' });
-	const dataSize = blob.size;
-	const chunkSize = 10 * 1024 * 1024;
+    const localVersion = getLocalVersion();
+    const cloudVersion = await getCloudVersion(s3, bucketName);
 
-	const s3 = new AWS.S3();
+    if (parseInt(cloudVersion, 10) > parseInt(localVersion, 10)) {
+        showActionMessage('检测到云端有较新版本，正在从 S3 导入数据...');
+        await importFromS3();
+        isExportInProgress = false;
+        return;
+    }
 
-	if (dataSize > chunkSize) {
-		const createMultipartParams = {
-			Bucket: bucketName,
-			Key: 'typingmind-backup.json'
-		};
+    // 增加版本号并保存
+    let newVersion = (parseInt(localVersion, 10) + 1).toString().padStart(12, '0');
+    setLocalVersion(newVersion);
 
-		const multipart = await s3
-			.createMultipartUpload(createMultipartParams)
-			.promise();
-		const promises = [];
+    try {
+        const data = await exportBackupData();
+        const dataStr = JSON.stringify(data);
+        const blob = new Blob([dataStr], { type: 'application/json' });
+        const dataSize = blob.size;
+        const chunkSize = 10 * 1024 * 1024;
 
-		let partNumber = 1;
-		let start = 0;
+        if (dataSize > chunkSize) {
+            const createMultipartParams = {
+                Bucket: bucketName,
+                Key: getBackupKey(newVersion)
+            };
 
-		while (start < dataSize) {
-			const end = Math.min(start + chunkSize, dataSize);
-			const chunkBlob = blob.slice(start, end);
+            const multipart = await s3.createMultipartUpload(createMultipartParams).promise();
+            const promises = [];
+            let partNumber = 1;
+            let start = 0;
 
-			const partPromise = new Promise((resolve, reject) => {
-				const reader = new FileReader();
-				reader.onload = async (event) => {
-					const partParams = {
-						Body: event.target.result,
-						Bucket: bucketName,
-						Key: 'typingmind-backup.json',
-						PartNumber: partNumber,
-						UploadId: multipart.UploadId
-					};
+            while (start < dataSize) {
+                const end = Math.min(start + chunkSize, dataSize);
+                const chunkBlob = blob.slice(start, end);
 
-					try {
-						const result = await s3.uploadPart(partParams).promise();
-						resolve({ ETag: result.ETag, PartNumber: partNumber });
-					} catch (err) {
-						reject(err);
-					}
+                const partPromise = new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = async (event) => {
+                        const partParams = {
+                            Body: event.target.result,
+                            Bucket: bucketName,
+                            Key: 'typingmind-backup.json',
+                            PartNumber: partNumber,
+                            UploadId: multipart.UploadId
+                        };
 
-					partNumber++;
-				};
+                        try {
+                            const result = await s3.uploadPart(partParams).promise();
+                            resolve({ ETag: result.ETag, PartNumber: partNumber });
+                        } catch (err) {
+                            reject(err);
+                        }
 
-				reader.onerror = (error) => {
-					reject(error);
-				};
+                        partNumber++;
+                    };
 
-				reader.readAsArrayBuffer(chunkBlob);
-			});
+                    reader.onerror = (error) => {
+                        reject(error);
+                    };
 
-			promises.push(partPromise);
-			start = end;
-		}
+                    reader.readAsArrayBuffer(chunkBlob);
+                });
 
-		const uploadedParts = await Promise.all(promises);
+                promises.push(partPromise);
+                start = end;
+            }
 
-		const completeParams = {
-			Bucket: bucketName,
-			Key: 'typingmind-backup.json',
-			UploadId: multipart.UploadId,
-			MultipartUpload: {
-				Parts: uploadedParts
-			}
-		};
-		await s3.completeMultipartUpload(completeParams).promise();
-	} else {
-		const putParams = {
-			Bucket: bucketName,
-			Key: 'typingmind-backup.json',
-			Body: dataStr,
-			ContentType: 'application/json'
-		};
+            const uploadedParts = await Promise.all(promises);
 
-		await s3.putObject(putParams).promise();
-	}
+            const completeParams = {
+                Bucket: bucketName,
+                Key: 'typingmind-backup.json',
+                UploadId: multipart.UploadId,
+                MultipartUpload: {
+                    Parts: uploadedParts
+                }
+            };
+            await s3.completeMultipartUpload(completeParams).promise();
+        } else {
+            const putParams = {
+                Bucket: bucketName,
+                Key: 'typingmind-backup.json',
+                Body: dataStr,
+                ContentType: 'application/json'
+            };
 
-	const currentTime = new Date().toLocaleString();
-	localStorage.setItem('last-cloud-sync', currentTime);
-	var element = document.getElementById('last-sync-msg');
-	if (element !== null) {
-		element.innerText = `Last sync done at ${currentTime}`;
-	}
-	startBackupInterval();
+            await s3.putObject(putParams).promise();
+        }
+
+        
+        const currentTime = new Date().toLocaleString();
+        localStorage.setItem('last-cloud-sync', currentTime);
+        var element = document.getElementById('last-sync-msg');
+        if (element !== null) {
+            element.innerText = `Last sync done at ${currentTime}`;
+        }
+        showActionMessage('导出完成');
+        startBackupInterval();
+    } catch (error) {
+        console.error('备份失败：', error);
+        showActionMessage('导出失败');
+    } finally {
+        isExportInProgress = false;
+    }
 }
 
 // Function to handle import from S3
 async function importFromS3() {
-	const bucketName = localStorage.getItem('aws-bucket');
-	const awsRegion = localStorage.getItem('aws-region');
-	const awsAccessKey = localStorage.getItem('aws-access-key');
-	const awsSecretKey = localStorage.getItem('aws-secret-key');
-	const awsEndpoint = localStorage.getItem('aws-endpoint');
+    const bucketName = localStorage.getItem('aws-bucket');
+    const awsRegion = localStorage.getItem('aws-region');
+    const awsAccessKey = localStorage.getItem('aws-access-key');
+    const awsSecretKey = localStorage.getItem('aws-secret-key');
+    const awsEndpoint = localStorage.getItem('aws-endpoint');
 
-	if (typeof AWS === 'undefined') {
-		await loadAwsSdk();
-	}
+    if (typeof AWS === 'undefined') {
+        await loadAwsSdk();
+    }
 
-	const awsConfig = {
-		accessKeyId: awsAccessKey,
-		secretAccessKey: awsSecretKey,
-		region: awsRegion
-	};
+    const awsConfig = {
+        accessKeyId: awsAccessKey,
+        secretAccessKey: awsSecretKey,
+        region: awsRegion
+    };
 
-	if (awsEndpoint) {
-		awsConfig.endpoint = awsEndpoint;
-	}
+    if (awsEndpoint) {
+        awsConfig.endpoint = awsEndpoint;
+    }
 
-	AWS.config.update(awsConfig);
+    AWS.config.update(awsConfig);
+    const s3 = new AWS.S3();
 
-	const s3 = new AWS.S3();
-	const params = {
-		Bucket: bucketName,
-		Key: 'typingmind-backup.json'
-	};
-
-	s3.getObject(params, function (err, data) {
-		const actionMsgElement = document.getElementById('action-msg');
-		if (err) {
-			actionMsgElement.textContent = `Error fetching data: ${err.message}`;
-			actionMsgElement.style.color = 'white';
-			return;
-		}
-
-		const importedData = JSON.parse(data.Body.toString('utf-8'));
-		importDataToStorage(importedData);
-		const currentTime = new Date().toLocaleString();
-		localStorage.setItem('last-cloud-sync', currentTime);
-		var element = document.getElementById('last-sync-msg');
-		if (element !== null) {
-			element.innerText = `Last sync done at ${currentTime}`;
-		}
-		wasImportSuccessful = true;
-	});
+    try {
+        // 获取备份数据
+        const cloudVersion = await getCloudVersion(s3, bucketName);
+		const params = {
+			Bucket: bucketName,
+			Key: getBackupKey(cloudVersion)
+		};
+        
+        const data = await s3.getObject(params).promise();
+        const importedData = JSON.parse(data.Body.toString('utf-8'));
+        
+        // 导入数据
+        importDataToStorage(importedData);
+        
+        setLocalVersion(cloudVersion);
+        
+        // 更新同步时间和状态
+        const currentTime = new Date().toLocaleString();
+        localStorage.setItem('last-cloud-sync', currentTime);
+        
+        const element = document.getElementById('last-sync-msg');
+        if (element) {
+            element.innerText = `Last sync done at ${currentTime}`;
+        }
+        
+        wasImportSuccessful = true;
+        
+        const actionMsgElement = document.getElementById('action-msg');
+        if (actionMsgElement) {
+            actionMsgElement.textContent = '导入完成';
+            actionMsgElement.style.color = 'white';
+        }
+    } catch (err) {
+        const actionMsgElement = document.getElementById('action-msg');
+        if (actionMsgElement) {
+            actionMsgElement.textContent = `Error fetching data: ${err.message}`;
+            actionMsgElement.style.color = 'white';
+        }
+        console.error('导入失败:', err);
+    }
 }
 
 // Validate the AWS connection
@@ -807,4 +847,41 @@ async function handleBackupFiles() {
 			}
 		}
 	});
+}
+
+function getLocalVersion() {
+    return localStorage.getItem('backup-version') || '000000000001';
+}
+
+function setLocalVersion(version) {
+    localStorage.setItem('backup-version', version);
+}
+
+function getBackupKey(version) {
+    return `typingmind-backup.${version}.json`;
+}
+
+async function getCloudVersion(s3, bucketName) {
+    try {
+        const params = {
+            Bucket: bucketName,
+            Prefix: 'typingmind-backup.'
+        };
+        const data = await s3.listObjectsV2(params).promise();
+        if (data.Contents && data.Contents.length > 0) {
+            const backupFiles = data.Contents.map(obj => obj.Key)
+                .filter(key => key.match(/typingmind-backup\.\d{12}\.json/))
+                .sort()
+                .reverse();
+            
+            if (backupFiles.length > 0) {
+                const version = backupFiles[0].match(/\.(\d{12})\.json/)[1];
+                return version;
+            }
+        }
+        return '000000000000';
+    } catch (error) {
+        console.error('获取云端版本号失败：', error);
+        return '000000000000';
+    }
 }
