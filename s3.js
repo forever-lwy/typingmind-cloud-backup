@@ -1,5 +1,73 @@
 let backupIntervalRunning = false;
 let wasImportSuccessful = false;
+let lastBackupTime = 0;
+let pendingBackup = false;
+let isBackupOperation = false;
+
+// 修改存储监听器
+function setupStorageListeners() {
+    // 监听 localStorage 变更
+    const originalSetItem = localStorage.setItem;
+    localStorage.setItem = function(key, value) {
+        originalSetItem.apply(this, arguments);
+        // 忽略备份相关的操作
+        if (!isBackupOperation && 
+            !key.startsWith('backup-') && 
+            !key.startsWith('aws-') &&
+            !key.startsWith('last-') &&
+            key !== 'activeTabBackupRunning') {
+            triggerBackup();
+        }
+    };
+
+    // 监听 IndexedDB 变更
+    const dbName = 'keyval-store';
+    const request = indexedDB.open(dbName);
+    request.onsuccess = function(event) {
+        const db = event.target.result;
+        const originalTransaction = db.transaction;
+        db.transaction = function(...args) {
+            const tx = originalTransaction.apply(this, args);
+            if(args[1] === 'readwrite' && !isBackupOperation) {
+                triggerBackup();
+            }
+            return tx;
+        };
+    };
+}
+
+// 触发备份的函数
+async function triggerBackup() {
+    const now = Date.now();
+    
+    // 如果已经有等待执行的备份,就不再设置新的备份
+    if (pendingBackup) {
+        return;
+    }
+    
+    // 距离上次备份未超过1分钟,设置延迟备份
+    if (now - lastBackupTime < 60000) {
+        pendingBackup = true;
+        setTimeout(async () => {
+            if (!isExportInProgress && wasImportSuccessful) {
+                lastBackupTime = Date.now();
+                isExportInProgress = true;
+                await backupToS3();
+                isExportInProgress = false;
+            }
+            pendingBackup = false;
+        }, 60000 - (now - lastBackupTime));
+    } 
+    // 距离上次备份超过1分钟,立即执行备份
+    else {
+        if (!isExportInProgress && wasImportSuccessful) {
+            lastBackupTime = now;
+            isExportInProgress = true;
+            await backupToS3();
+            isExportInProgress = false;
+        }
+    }
+}
 
 (async function checkDOMOrRunBackup() {
 	if (document.readyState === 'complete') {
@@ -106,11 +174,11 @@ cloudSyncBtn.addEventListener('click', function () {
 });
 
 // New Popup
-let lastBackupTime = 0;
 let isExportInProgress = false;
 let backupInterval;
 
 function openSyncModal() {
+	isBackupOperation = true;
 	var existingModal = document.querySelector(
 		'div[data-element-id="sync-modal-dbbackup"]'
 	);
@@ -319,6 +387,9 @@ function openSyncModal() {
 				clearInterval(backupInterval);
 			}
 		});
+	
+	
+	isBackupOperation = false;
 
 	// Export button click handler
 	document.getElementById('export-to-s3-btn')
@@ -345,6 +416,7 @@ function openSyncModal() {
 		.addEventListener('click', async function () {
 			await importFromS3();
 			wasImportSuccessful = true;
+			showActionMessage('导入成功!');
 		});
 }
 
@@ -386,6 +458,7 @@ document.addEventListener('visibilitychange', async () => {
 // Function to check for backup file and import it
 // 修改 checkAndImportBackup 函数
 async function checkAndImportBackup() {
+	isBackupOperation = true;
     const bucketName = localStorage.getItem('aws-bucket');
     const awsRegion = localStorage.getItem('aws-region');
     const awsAccessKey = localStorage.getItem('aws-access-key'); 
@@ -440,25 +513,22 @@ async function checkAndImportBackup() {
             return false;
         }
     }
+	isBackupOperation = false;
     return false;
 }
 
 // Function to start the backup interval
 function startBackupInterval() {
-	if (backupIntervalRunning) return;
-	// Check if another tab is already running the backup
-	if (localStorage.getItem('activeTabBackupRunning') === 'true') {
-		return;
-	}
-	backupIntervalRunning = true;
-	localStorage.setItem('activeTabBackupRunning', 'true');
-	backupInterval = setInterval(async () => {
-		if (wasImportSuccessful && !isExportInProgress) {
-			isExportInProgress = true;
-			await backupToS3();
-			isExportInProgress = false;
-		}
-	}, 60000);
+	isBackupOperation = true;
+    if (backupIntervalRunning) return;
+    if (localStorage.getItem('activeTabBackupRunning') === 'true') return;
+    
+    backupIntervalRunning = true;
+    localStorage.setItem('activeTabBackupRunning', 'true');
+	isBackupOperation = false;
+    
+    // 初始化存储监听器
+    setupStorageListeners();
 }
 
 // Function to load AWS SDK asynchronously
@@ -488,6 +558,7 @@ async function loadJSZip() {
 
 // Function to import data from S3 to localStorage and IndexedDB
 function importDataToStorage(data) {
+	isBackupOperation = true;
 	Object.keys(data.localStorage).forEach((key) => {
 		localStorage.setItem(key, data.localStorage[key]);
 	});
@@ -505,6 +576,7 @@ function importDataToStorage(data) {
 			});
 		};
 	};
+	isBackupOperation = false;
 }
 
 // Function to export data from localStorage and IndexedDB
@@ -538,7 +610,7 @@ function exportBackupData() {
 
 // Function to handle backup to S3 with chunked multipart upload using Blob
 async function backupToS3() {
-    
+    isBackupOperation = true;
     const bucketName = localStorage.getItem('aws-bucket');
     const awsRegion = localStorage.getItem('aws-region');
     const awsAccessKey = localStorage.getItem('aws-access-key');
@@ -659,6 +731,7 @@ async function backupToS3() {
         if (element !== null) {
             element.innerText = `Last sync done at ${currentTime}`;
         }
+		isBackupOperation = false;
         startBackupInterval();
     } catch (error) {
         console.error('备份失败：', error);
@@ -667,6 +740,7 @@ async function backupToS3() {
 
 // Function to handle import from S3
 async function importFromS3() {
+	isBackupOperation = true;
     const bucketName = localStorage.getItem('aws-bucket');
     const awsRegion = localStorage.getItem('aws-region');
     const awsAccessKey = localStorage.getItem('aws-access-key');
@@ -723,6 +797,7 @@ async function importFromS3() {
             actionMsgElement.textContent = '导入完成';
             actionMsgElement.style.color = 'white';
         }
+		isBackupOperation = false;
     } catch (err) {
         const actionMsgElement = document.getElementById('action-msg');
         if (actionMsgElement) {
@@ -774,6 +849,7 @@ async function validateAwsCredentials(bucketName, accessKey, secretKey) {
 // Function to create a dated backup copy, zip it, and purge old backups
 async function handleBackupFiles() {
 	//console.log('Inside handleBackupFiles');
+	isBackupOperation = true;
 
 	const bucketName = localStorage.getItem('aws-bucket');
 	const awsRegion = localStorage.getItem('aws-region');
@@ -867,6 +943,7 @@ async function handleBackupFiles() {
 			}
 		}
 	});
+	isBackupOperation = false;
 }
 
 function getLocalVersion() {
@@ -874,7 +951,9 @@ function getLocalVersion() {
 }
 
 function setLocalVersion(version) {
+	isBackupOperation = true;
     localStorage.setItem('backup-version', version);
+	isBackupOperation = false;
 }
 
 async function getCloudVersion(s3, bucketName) {
