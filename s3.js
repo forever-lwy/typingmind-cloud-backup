@@ -521,7 +521,6 @@ async function checkAndImportBackup() {
 function startBackupInterval() {
 	isBackupOperation = true;
     if (backupIntervalRunning) return;
-    if (localStorage.getItem('activeTabBackupRunning') === 'true') return;
     
     backupIntervalRunning = true;
     localStorage.setItem('activeTabBackupRunning', 'true');
