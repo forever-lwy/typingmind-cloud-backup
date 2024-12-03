@@ -9,6 +9,18 @@ let wasImportSuccessful = false;
 	}
 })();
 
+function showActionMessage(message) {
+    const actionMsgElement = document.getElementById('action-msg');
+    if (actionMsgElement) {
+        actionMsgElement.textContent = message;
+        actionMsgElement.style.color = 'white';
+        // 3秒后清除消息
+        setTimeout(() => {
+            actionMsgElement.textContent = '';
+        }, 3000);
+    }
+}
+
 async function handleDOMReady() {
 	window.removeEventListener('load', handleDOMReady);
 
@@ -318,6 +330,7 @@ function openSyncModal() {
                 setLocalVersion('000000000001'); 
             }
             await backupToS3();
+			showActionMessage('导出成功!');  // 添加导出成功提示
         } catch(err) {
             console.error('导出失败:', err);
             showActionMessage('导出失败:' + err.message);
@@ -527,7 +540,6 @@ function exportBackupData() {
 async function backupToS3() {
     if (isExportInProgress) return;
     isExportInProgress = true;
-    showActionMessage('正在导出...');
     
     const bucketName = localStorage.getItem('aws-bucket');
     const awsRegion = localStorage.getItem('aws-region');
@@ -556,7 +568,6 @@ async function backupToS3() {
     const cloudVersion = await getCloudVersion(s3, bucketName);
 
     if (parseInt(cloudVersion, 10) > parseInt(localVersion, 10)) {
-        showActionMessage('检测到云端有较新版本，正在从 S3 导入数据...');
         await importFromS3();
         isExportInProgress = false;
         return;
@@ -651,11 +662,9 @@ async function backupToS3() {
         if (element !== null) {
             element.innerText = `Last sync done at ${currentTime}`;
         }
-        showActionMessage('导出完成');
         startBackupInterval();
     } catch (error) {
         console.error('备份失败：', error);
-        showActionMessage('导出失败');
     } finally {
         isExportInProgress = false;
     }
