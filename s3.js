@@ -538,8 +538,6 @@ function exportBackupData() {
 
 // Function to handle backup to S3 with chunked multipart upload using Blob
 async function backupToS3() {
-    if (isExportInProgress) return;
-    isExportInProgress = true;
     
     const bucketName = localStorage.getItem('aws-bucket');
     const awsRegion = localStorage.getItem('aws-region');
@@ -569,7 +567,6 @@ async function backupToS3() {
 
     if (parseInt(cloudVersion, 10) > parseInt(localVersion, 10)) {
         await importFromS3();
-        isExportInProgress = false;
         return;
     }
 
@@ -665,8 +662,6 @@ async function backupToS3() {
         startBackupInterval();
     } catch (error) {
         console.error('备份失败：', error);
-    } finally {
-        isExportInProgress = false;
     }
 }
 
