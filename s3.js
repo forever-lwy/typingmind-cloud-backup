@@ -40,7 +40,7 @@ async function handleDOMReady() {
 
 	if (lastSync && importSuccessful) {
 		if (element !== null) {
-			element.innerText = `Last sync done at ${currentTime}`;
+			element.innerText = `Last sync done at ${lastSync}`;
 			element = null;
 		}
 		if (!storedSuffix || currentDateSuffix > storedSuffix) {
@@ -213,7 +213,7 @@ function openSyncModal() {
 	var element = document.getElementById('last-sync-msg');
 	if (lastSync) {
 		if (element !== null) {
-			element.innerText = `Last sync done at ${currentTime}`;
+			element.innerText = `Last sync done at ${lastSync}`;
 			element = null;
 		}
 	}
@@ -308,7 +308,7 @@ function openSyncModal() {
 				var element = document.getElementById('last-sync-msg');
 				if (lastSync && importSuccessful) {
 					if (element !== null) {
-						element.innerText = `Last sync done at ${currentTime}`;
+						element.innerText = `Last sync done at ${lastSync}`;
 						element = null;
 					}
 				}
@@ -367,7 +367,7 @@ document.addEventListener('visibilitychange', async () => {
 
 		if (lastSync && importSuccessful) {
 			if (element !== null) {
-				element.innerText = `Last sync done at ${currentTime}`;
+				element.innerText = `Last sync done at ${lastSync}`;
 				element = null;
 			}
 			if (!storedSuffix || currentDateSuffix > storedSuffix) {
@@ -666,9 +666,10 @@ async function backupToS3() {
 
         const currentTime = new Date().toLocaleString();
         localStorage.setItem('last-cloud-sync', currentTime);
+	const lastSync = localStorage.getItem('last-cloud-sync');
         var element = document.getElementById('last-sync-msg');
         if (element !== null) {
-            element.innerText = `Last sync done at ${currentTime}`;
+            element.innerText = `Last sync done at ${lastSync}`;
         }
         startBackupInterval();
     } catch (error) {
@@ -721,10 +722,10 @@ async function importFromS3() {
         // 更新同步时间和状态
         const currentTime = new Date().toLocaleString();
         localStorage.setItem('last-cloud-sync', currentTime);
-        
+        const lastSync = localStorage.getItem('last-cloud-sync');
         const element = document.getElementById('last-sync-msg');
         if (element) {
-            element.innerText = `Last sync done at ${currentTime}`;
+            element.innerText = `Last sync done at ${lastSync}`;
         }
         
         wasImportSuccessful = true;
