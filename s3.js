@@ -13,7 +13,7 @@ function showActionMessage(message) {
     const actionMsgElement = document.getElementById('action-msg');
     if (actionMsgElement) {
         actionMsgElement.textContent = message;
-        actionMsgElement.style.color = 'white';
+        actionMsgElement.style.color = 'black';
         // 3秒后清除消息
         setTimeout(() => {
             actionMsgElement.textContent = '';
