@@ -309,13 +309,22 @@ function openSyncModal() {
 		});
 
 	// Export button click handler
-	document
-		.getElementById('export-to-s3-btn')
-		.addEventListener('click', async function () {
-			isExportInProgress = true;
-			await backupToS3();
-			isExportInProgress = false;
-		});
+	document.getElementById('export-to-s3-btn')
+    .addEventListener('click', async function() {
+        try {
+            isExportInProgress = true;
+            // 设置初始版本号
+            if(!localStorage.getItem('backup-version')) {
+                setLocalVersion('000000000001'); 
+            }
+            await backupToS3();
+        } catch(err) {
+            console.error('导出失败:', err);
+            showActionMessage('导出失败:' + err.message);
+        } finally {
+            isExportInProgress = false;
+        }
+    });
 
 	// Import button click handler
 	document
@@ -362,59 +371,63 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 // Function to check for backup file and import it
+// 修改 checkAndImportBackup 函数
 async function checkAndImportBackup() {
-	const bucketName = localStorage.getItem('aws-bucket');
-	const awsRegion = localStorage.getItem('aws-region');
-	const awsAccessKey = localStorage.getItem('aws-access-key');
-	const awsSecretKey = localStorage.getItem('aws-secret-key');
-	const awsEndpoint = localStorage.getItem('aws-endpoint');
+    const bucketName = localStorage.getItem('aws-bucket');
+    const awsRegion = localStorage.getItem('aws-region');
+    const awsAccessKey = localStorage.getItem('aws-access-key'); 
+    const awsSecretKey = localStorage.getItem('aws-secret-key');
+    const awsEndpoint = localStorage.getItem('aws-endpoint');
 
-	if (bucketName && awsAccessKey && awsSecretKey) {
-		if (typeof AWS === 'undefined') {
-			await loadAwsSdk();
-		}
+    if (bucketName && awsAccessKey && awsSecretKey) {
+        if (typeof AWS === 'undefined') {
+            await loadAwsSdk();
+        }
 
-		const awsConfig = {
-			accessKeyId: awsAccessKey,
-			secretAccessKey: awsSecretKey,
-			region: awsRegion
-		};
+        const awsConfig = {
+            accessKeyId: awsAccessKey,
+            secretAccessKey: awsSecretKey,
+            region: awsRegion
+        };
 
-		if (awsEndpoint) {
-			awsConfig.endpoint = awsEndpoint;
-		}
+        if (awsEndpoint) {
+            awsConfig.endpoint = awsEndpoint;
+        }
 
-		AWS.config.update(awsConfig);
+        AWS.config.update(awsConfig);
+        const s3 = new AWS.S3();
 
-		const s3 = new AWS.S3();
-		const params = {
-			Bucket: bucketName,
-			Key: 'typingmind-backup.json'
-		};
+        // 先检查存储桶是否存在备份文件
+        const listParams = {
+            Bucket: bucketName,
+            Prefix: 'typingmind-backup.json'
+        };
 
-		return new Promise((resolve) => {
-			s3.getObject(params, async function (err) {
-				if (!err) {
-					await importFromS3();
-					wasImportSuccessful = true;
-					resolve(true);
-				} else {
-					if (err.code === 'NoSuchKey') {
-						alert(
-							"Backup file not found in S3! Run an adhoc 'Export to S3' first."
-						);
-					} else {
-						localStorage.setItem('aws-bucket', '');
-						localStorage.setItem('aws-access-key', '');
-						localStorage.setItem('aws-secret-key', '');
-						alert('Failed to connect to AWS. Please check your credentials.');
-					}
-					resolve(false);
-				}
-			});
-		});
-	}
-	return false;
+        try {
+            const listResult = await s3.listObjectsV2(listParams).promise();
+            if (listResult.Contents && listResult.Contents.length > 0) {
+                // 存在备份文件,执行导入
+                await importFromS3();
+                wasImportSuccessful = true;
+                return true;
+            } else {
+                // 存储桶为空,不提示警告,直接返回false
+                wasImportSuccessful = false;
+                return false;
+            }
+        } catch (err) {
+            if (err.code === 'NoSuchBucket') {
+                alert('存储桶不存在,请检查配置');
+            } else {
+                localStorage.setItem('aws-bucket', '');
+                localStorage.setItem('aws-access-key', '');
+                localStorage.setItem('aws-secret-key', '');
+                alert('连接AWS失败,请检查凭证');
+            }
+            return false;
+        }
+    }
+    return false;
 }
 
 // Function to start the backup interval
