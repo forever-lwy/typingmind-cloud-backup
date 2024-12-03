@@ -563,7 +563,7 @@ async function backupToS3() {
         if (dataSize > chunkSize) {
             const createMultipartParams = {
                 Bucket: bucketName,
-                Key: getBackupKey(newVersion)
+                Key: 'typingmind-backup.json'
             };
 
             const multipart = await s3.createMultipartUpload(createMultipartParams).promise();
@@ -629,7 +629,9 @@ async function backupToS3() {
             await s3.putObject(putParams).promise();
         }
 
-        
+        // 上传新版本号
+        await setCloudVersion(s3, bucketName, newVersion);
+
         const currentTime = new Date().toLocaleString();
         localStorage.setItem('last-cloud-sync', currentTime);
         var element = document.getElementById('last-sync-msg');
@@ -673,11 +675,10 @@ async function importFromS3() {
 
     try {
         // 获取备份数据
-        const cloudVersion = await getCloudVersion(s3, bucketName);
-		const params = {
-			Bucket: bucketName,
-			Key: getBackupKey(cloudVersion)
-		};
+        const params = {
+            Bucket: bucketName,
+            Key: 'typingmind-backup.json'
+        };
         
         const data = await s3.getObject(params).promise();
         const importedData = JSON.parse(data.Body.toString('utf-8'));
@@ -685,6 +686,8 @@ async function importFromS3() {
         // 导入数据
         importDataToStorage(importedData);
         
+        // 获取并同步版本号
+        const cloudVersion = await getCloudVersion(s3, bucketName);
         setLocalVersion(cloudVersion);
         
         // 更新同步时间和状态
@@ -857,31 +860,29 @@ function setLocalVersion(version) {
     localStorage.setItem('backup-version', version);
 }
 
-function getBackupKey(version) {
-    return `typingmind-backup.${version}.json`;
-}
-
 async function getCloudVersion(s3, bucketName) {
     try {
         const params = {
             Bucket: bucketName,
-            Prefix: 'typingmind-backup.'
+            Key: 'backup-version.txt'
         };
-        const data = await s3.listObjectsV2(params).promise();
-        if (data.Contents && data.Contents.length > 0) {
-            const backupFiles = data.Contents.map(obj => obj.Key)
-                .filter(key => key.match(/typingmind-backup\.\d{12}\.json/))
-                .sort()
-                .reverse();
-            
-            if (backupFiles.length > 0) {
-                const version = backupFiles[0].match(/\.(\d{12})\.json/)[1];
-                return version;
-            }
-        }
-        return '000000000000';
+        const data = await s3.getObject(params).promise();
+        return data.Body.toString('utf-8');
     } catch (error) {
         console.error('获取云端版本号失败：', error);
         return '000000000000';
+    }
+}
+
+async function setCloudVersion(s3, bucketName, version) {
+    try {
+        const params = {
+            Bucket: bucketName,
+            Key: 'backup-version.txt',
+            Body: version
+        };
+        await s3.putObject(params).promise();
+    } catch (error) {
+        console.error('设置云端版本号失败：', error);
     }
 }
